@@ -6,6 +6,23 @@
     <title>Canvas Scene</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/src/style.css" />
+    <style>
+      /* Ensure the canvas fills the viewport with no scroll gaps */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #000; /* avoids flashing white behind canvas */
+      }
+      #scene {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+      }
+    </style>
   </head>
   <body>
     <canvas id="scene"></canvas>

@@ -10,6 +10,7 @@ html,
 body {
   width: 100%;
   height: 100%;
+  overflow: hidden;
 }
 
 body {
@@ -23,4 +24,95 @@ body {
 canvas {
   flex: 1;
   display: block;
+}
+
+#scene-controls {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(8, 12, 20, 0.78);
+  color: #e6eefc;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
+  z-index: 10;
+  min-width: 240px;
+}
+
+.controls__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.controls__row:last-child {
+  margin-bottom: 0;
+}
+
+.controls__label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+  color: #9bb2d6;
+}
+
+.controls__value {
+  font-variant-numeric: tabular-nums;
+  color: #f4fbff;
+}
+
+.controls__button {
+  margin-left: auto;
+  padding: 6px 10px;
+  border: 1px solid #2a3c5d;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #1a2740, #0f1727);
+  color: #e6eefc;
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.controls__button:hover {
+  border-color: #3d73ff;
+  box-shadow: 0 0 0 1px rgba(61, 115, 255, 0.25);
+}
+
+.controls__button:active {
+  transform: translateY(1px);
+}
+
+.controls__toggles {
+  gap: 10px;
+}
+
+.controls__toggles--stack {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.controls__toggles--stack .controls__toggle {
+  width: 100%;
+}
+
+.controls__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  text-transform: capitalize;
+}
+
+.controls__toggle input {
+  accent-color: #3d73ff;
 }

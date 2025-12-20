@@ -1,0 +1,192 @@
+sky: # Background gradient
+  parallax: 0.02
+  colors: ["#040a17", "#061023", "#081a2f", "#0a233b"]
+  offsets: [0, 0.35, 0.7, 1]
+
+moon: # Moon position + palette
+  parallax: 0
+  radius: 70
+  center:
+    x: 0.72
+    y: 0.18
+  glowInner: "rgba(255, 248, 230, 0.9)"
+  glowMid: "rgba(255, 248, 230, 0.55)"
+  glowOuter: "rgba(255, 248, 230, 0)"
+  bodyLight: "#f7f4e5"
+  bodyDark: "#e8e3cf"
+  shadeAlpha: 0.08
+  edgeNoiseCount: 40
+  seed: 1337
+
+stars: # Starfield density/speed/size
+  density: 0.00035        # stars per pixel^2
+  minSpeed: 1             # twinkle phase speed range
+  maxSpeed: 2.5
+  minRadius: 0.3
+  maxRadius: 1.5
+  maxHeightFactor: 0.6    # star height band (0-1 of screen)
+  minCount: 50
+  parallax: 0.05
+
+clouds: # Parallax clouds (soft lobes)
+  spawnInterval: 6        # seconds between spawns
+  minSpeed: 10
+  maxSpeed: 25
+  minWidth: 70
+  maxWidth: 180
+  alpha: 0.24             # overall opacity
+  color: "#7a8ca5"
+  lobeCountMin: 4
+  lobeCountMax: 8
+  morphSpeedMin: 0.025    # shape change speed range
+  morphSpeedMax: 0.06
+  morphAmpX: 10           # wobble amplitude
+  morphAmpY: 6
+  morphAmpR: 6
+  texturePuffCount: 12    # internal noise puffs
+  parallax: 0.08
+
+skyMessage: # Periodic snow word in the sky
+  enabled: true
+  texts: ["MERRY XMAS", "SEASONS GREETINGS", "SANTA IS COMING", "HAPPY HOLIDAYS", "JOY TO ALL"]
+  interval: 16
+  hold: 3
+  fadeIn: 0.6
+  fadeOut: 3
+  sizeFactor: 0.14
+  center:
+    x: 0.5
+    y: 0.28
+  sampleStep: 4
+  jitter: 0.6
+  flakeSize: [1.2, 2.6]
+  gravity: 26
+  windScale: 0.35
+  color: "#f2f6ff"
+  maxFlakes: 1600
+  parallax: 0.03
+
+hills: # Distant hills baseline
+  baseHeightFactor: 0.35
+  fillColor: "#0d243f"
+  parallax: 0.12
+
+horizon: # Silhouette line that meets the sky
+  color: "#040b18"
+  parallax: 0.16
+  step: 40
+
+village: # Houses layout + colors
+  parallax: 0.2
+  groundHeightFactor: 0.24
+  minWidth: 50
+  maxWidth: 120
+  gapMin: 14
+  gapMax: 40
+  heightFactorRange: [0.05, 0.1]      # house height scaling
+  roofHeightFactorRange: [0.28, 0.5]
+  offsetYMax: 28        # allow gentle slope under houses
+  roofOverhang: 6
+  wallColor: "#0c1626"
+  roofColor: "#080f1b"
+  trimColor: "#0f1c2e"
+  windowLitColor: "#f7d17c"
+  windowOffColor: "#1a2433"
+  windowFrameColor: "#0b141f"
+  windowGlowColor: "rgba(247, 209, 124, 0.18)"
+  doorColor: "#121b2a"
+  chimneyColor: "#0f1a2a"
+  windowLitChance: 0.65
+  chimneyChance: 0.45
+  towerChance: 0.08
+  towerHeightMultiplier: 1.35
+  roofHeightMin: 25
+  roofHeightMax: 55
+  cottageWidthRange: [60, 140]
+  cottageHeightRange: [60, 120]
+  snowColor: "#dfe9f5"
+  snowBumpMin: 3
+  snowBumpMax: 6
+  smokeColor: "rgba(200, 220, 240, 0.35)"
+
+trees: # Foreground trees styling
+  parallax: 0.55
+  groundHeightFactor: 0.18
+  minWidth: 20
+  maxWidth: 80
+  gapMin: 10
+  gapMax: 32
+  heightRatioRange: [1.6, 2]
+  offsetYMax: 8
+  crownColor: "#3a8a7f"    # brighter teal foreground crowns
+  shadowColor: "#1f4f4c"
+  trunkColor: "#040910"
+  layerOffset: 15          # parallax band offset
+  lights:
+    chance: 0.2            # probability a tree gets lights
+    minPerTree: 10
+    maxPerTree: 18
+    colors: ["#fff4d0", "#ffd599", "#ff8b6b", "#ffd1f0", "#7ad8ff"]
+    twinkleSpeed: [0.8, 1.8]
+    intensity: [1.0, 1.4]
+
+snow: # Snowfall + accumulation
+  density: 0.00005         # mid-layer density (collides/accumulates)
+  drift: 450                # wind drift amplitude
+  fallSpeedMin: 5
+  fallSpeedMax: 50
+  accumulationRate: 5.9500   # how fast accumulation rises over time
+  foregroundDensity: 0.000075   # flakes in front of scene (no collision)
+  backgroundDensity: 0.000075   # flakes behind horizon (no collision)
+  maxDepth: 36             # max pile height before overflow
+  windScale: 1.35          # multiplies mouse wind influence on flakes
+  parallax:
+    background: 0.02
+    mid: 0.05
+    foreground: 0
+
+wind: # Mouse-driven jetstream trail
+    trailLife: 2.2        # seconds before a segment fades out
+    trailRadius: 100       # base influence half-width in pixels
+    trailRadiusMax: 180   # max influence when moving fastest
+    trailSpacing: 12      # distance between dropped segments
+    trailMaxSegments: 360 # cap to keep sampling fast
+    minSpeed: 60          # px/s before trail is written
+    speedScale: 0.08      # converts mouse speed to push strength
+    jitter: 0.08          # random radius wobble
+    decay: 0.06           # extra per-second fade multiplier
+    swirl: 0.20           # edge curl strength
+    ambientJitter: 0.5      # background flutter added to all flakes
+    maxPush: 320          # clamp for wind force
+    pullStrength: 0.4     # inward pull keeping flakes in the ribbon
+    ejectChance: 0.5      # probability of hose-like fling near the trail end
+    ejectBoost: 2.2       # extra push strength for the fling
+    ejectWindow: 0.35     # fraction of segment lifetime where flings can occur
+
+santa: # Sleigh flyover
+  parallax: 0.04
+  minInterval: 18
+  maxInterval: 30
+  flightDurationMin: 8
+  flightDurationMax: 12
+  altitudeRange: [0.12, 0.28]
+  scale: 0.95
+  bobAmplitude: 10
+  bobSpeed: 0.7
+  windScale: 0.22
+  windMaxOffset: 70
+  mouseInfluenceRadius: 160
+  mouseInfluenceStrength: 36
+  sparkleRate: 22
+  sparkleLife: 1.4
+  sparkleDrift: 12
+  sparkleColor: "rgba(255, 214, 153, 0.8)"
+  silhouetteColor: "#070a12"
+  presentIntervalMin: 1.6
+  presentIntervalMax: 2.8
+  presentChance: 0.9
+  presentGravity: 240
+  presentFlightTimeMin: 1.5
+  presentFlightTimeMax: 2.4
+  presentColor: "#9a5d46"
+  presentRibbonColor: "#cbb47c"
