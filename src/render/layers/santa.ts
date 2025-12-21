@@ -293,7 +293,7 @@ export class SantaSleighLayer extends BaseLayer {
 
 
   public getPresentWakes(): PresentWake[] {
-    const wakes = this.presents.map((p) => {
+    const wakes: PresentWake[] = this.presents.map((p) => {
       const pos = this.getPresentPosition(p);
       return {
         x: pos.x,
