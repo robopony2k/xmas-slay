@@ -926,6 +926,9 @@ export class VillageSilhouetteLayer extends BaseLayer {
   private basePush: number;
   private time = 0;
   private snowLevel = 0;
+  private getDepthLift(depth: number): number {
+    return (1 - depth) * 40 - depth * 12;
+  }
 
   constructor(width: number, height: number, options?: SceneOptions["village"], terrain?: TerrainFn) {
     super(width, height, options?.parallax ?? 0.2);
@@ -1039,14 +1042,15 @@ export class VillageSilhouetteLayer extends BaseLayer {
     ctx.fillRect(0, snowTop, this.width, this.height - snowTop);
 
     const sortedHouses = [...this.houses].sort((a, b) => {
-      const ta = this.terrain(a.x + a.width / 2) - a.depth * 10;
-      const tb = this.terrain(b.x + b.width / 2) - b.depth * 10;
-      return ta - tb;
+      const baseA = this.getHouseBasePosition(a).y;
+      const baseB = this.getHouseBasePosition(b).y;
+      if (baseA === baseB) return a.depth - b.depth;
+      return baseA - baseB;
     });
 
     for (const house of sortedHouses) {
       const x = house.x;
-      const depthLift = (1 - house.depth) * 24 - house.depth * 6;
+      const depthLift = this.getDepthLift(house.depth);
       const groundY = this.terrain(x + house.width / 2) + this.basePush - depthLift;
       const y = groundY - house.height - house.offsetY;
       // keep houses opaque; adjust depth via slight lightness elsewhere if needed
@@ -1212,7 +1216,7 @@ export class VillageSilhouetteLayer extends BaseLayer {
   }
 
   private getHouseBasePosition(house: House): { x: number; y: number } {
-    const depthLift = (1 - house.depth) * 24 - house.depth * 6;
+    const depthLift = this.getDepthLift(house.depth);
     const groundY = this.terrain(house.x + house.width / 2) + this.basePush - depthLift;
     return { x: house.x + house.width / 2, y: groundY - house.offsetY };
   }
@@ -1239,7 +1243,7 @@ export class VillageSilhouetteLayer extends BaseLayer {
 
   private getChimneyWorldPosition(house: House): { x: number; y: number } | null {
     if (!house.chimney) return null;
-    const depthLift = (1 - house.depth) * 24 - house.depth * 6;
+    const depthLift = this.getDepthLift(house.depth);
     const groundY = this.terrain(house.x + house.width / 2) + this.basePush - depthLift;
     const y = groundY - house.height - house.offsetY;
     const ch = house.chimney;
@@ -1369,7 +1373,8 @@ export class VillageSilhouetteLayer extends BaseLayer {
               this.rand() *
                 (this.roofHeightFactorRange[1] - this.roofHeightFactorRange[0]))
         );
-      const offsetY = this.rand() * this.offsetYMax;
+      const depthOffsetScale = 0.3 + (1 - depth) * 1.0;
+      const offsetY = Math.pow(this.rand(), 0.65) * this.offsetYMax * depthOffsetScale;
       const roofOverhang = this.roofOverhang * 1.2;
 
       const { windows, door } = this.generateWindows(
@@ -1418,7 +1423,8 @@ export class VillageSilhouetteLayer extends BaseLayer {
 
     // Slight jitter in vertical position to avoid flat skyline
     for (const house of this.houses) {
-      house.offsetY += this.rand() * 14;
+      const depthOffsetScale = 0.3 + (1 - house.depth) * 0.9;
+      house.offsetY += this.rand() * (this.offsetYMax * 0.6) * depthOffsetScale;
       const maxHeight = baseY - house.height - house.offsetY;
       house.offsetY = Math.max(0, Math.min(maxHeight, house.offsetY));
     }
@@ -1801,6 +1807,7 @@ export class SnowfallLayer extends BaseLayer {
   private readonly foregroundDensity: number;
   private readonly backgroundDensity: number;
   private readonly maxDepth: number;
+  private readonly groundDepthCap: number;
   private readonly windScale: number;
   private groundBins: number[] = snowContext.groundBins;
   private groundWind = { x: 0, y: 0 };
@@ -1810,6 +1817,11 @@ export class SnowfallLayer extends BaseLayer {
   private gustBoost = 0;
   private gustCooldown = 0;
   private lastWindMag = 0;
+  private stormTime = 0;
+  private stormDir = 1;
+  private stormDirTarget = 1;
+  private stormCyclesSinceFlip = 0;
+  private stormHoldCycles = 3;
   private readonly mode: "background" | "mid" | "foreground";
   private readonly village?: VillageSilhouetteLayer;
   private readonly trees?: ForegroundTreesLayer;
@@ -1837,10 +1849,18 @@ export class SnowfallLayer extends BaseLayer {
       this.foregroundDensity = options?.foregroundDensity ?? 0.00025;
       this.backgroundDensity = options?.backgroundDensity ?? 0.00012;
       this.maxDepth = options?.maxDepth ?? 18;
+      this.groundDepthCap = Math.max(SNOW_DEFAULT_MAX_DEPTH * 1.5, this.maxDepth * 2);
       this.windScale = options?.windScale ?? 1.35;
       this.village = village;
       this.trees = trees;
       this.presentWakeProvider = presentWakeProvider;
+      if (this.mode === "mid") {
+        snowContext.groundDepthCap = this.groundDepthCap;
+        this.stormDir = Math.random() < 0.5 ? -1 : 1;
+        this.stormDirTarget = this.stormDir;
+        this.stormCyclesSinceFlip = 0;
+        this.stormHoldCycles = 2 + Math.floor(Math.random() * 3);
+      }
       if (this.mode === "mid") {
         snowContext.budgetMax = snowContext.budgetMax ?? SNOW_BUDGET_MAX;
         snowContext.budget = snowContext.budgetMax;
@@ -1859,6 +1879,9 @@ export class SnowfallLayer extends BaseLayer {
     }
     const windMag = mouseWind.getCurrentSpeed();
     const windTune = windConfig();
+    if (this.mode === "mid") {
+      this.updateStorm(dt, windTune);
+    }
     this.windMaxPush = windTune.maxPush;
     const windDelta = windMag - this.lastWindMag;
     this.lastWindMag = windMag;
@@ -1874,7 +1897,11 @@ export class SnowfallLayer extends BaseLayer {
     if (this.mode === "mid") {
       this.groundWind = this.sampleGroundWind();
       this.groundWindMax = windTune.maxPush;
-      snowContext.windSheen = clamp(0, 1, (windMag - 40) / 220 + this.gustBoost * 0.6);
+      snowContext.windSheen = clamp(
+        0,
+        1,
+        (windMag - 40) / 220 + this.gustBoost * 0.6 + snowContext.stormStrength * 0.6
+      );
       snowContext.windDir = this.groundWind.x;
       if (snowContext.puffQueue.length) {
         const maxEvents = 8;
@@ -1894,21 +1921,80 @@ export class SnowfallLayer extends BaseLayer {
       // cap ambient so it doesn't drown out the mouse jetstream
       const ambientMax = windTune.maxPush * 0.35;
       const ambient = Math.sin(performance.now() * 0.0002) * Math.min(this.drift, ambientMax);
+      const stormWindX = snowContext.stormWindX;
       for (const f of this.flakes) {
         const mw = mouseWind.getWindAt(f.x, f.y);
         const maxPush = windTune.maxPush;
         const randJitterX = (Math.random() - 0.5) * windTune.jitterX;
         const randJitterY = (Math.random() - 0.5) * windTune.jitterY;
-        let windX = ambient + mw.x * this.windScale + randJitterX;
+        let windX = ambient + mw.x * this.windScale + stormWindX + randJitterX;
         let windY = mw.y * this.windScale + randJitterY;
         if (hasWakes && presentWakes) {
           const wake = this.getPresentWakeOffset(presentWakes, f.x, f.y);
           windX += wake.x;
           windY += wake.y;
         }
-        windX = clamp(-maxPush, maxPush, windX);
+        if (
+          this.mode !== "background" &&
+          snowContext.skyMagnetActive &&
+          snowContext.skyMagnetPoints.length
+        ) {
+          const center = snowContext.skyMagnetCenter;
+          const radius = snowContext.skyMagnetRadius;
+          const strength = snowContext.skyMagnetStrength;
+          const bounds = snowContext.skyMagnetBounds;
+          const letterMaxY = snowContext.skyMagnetLetterMaxY;
+          if (center && radius > 0 && strength > 0) {
+            const dxC = f.x - center.x;
+            const dyC = f.y - center.y;
+            if (bounds && (f.y < bounds.minY || f.y > bounds.maxY)) {
+              // skip magnet pull outside the letter vertical band
+            } else {
+            if (Math.abs(dxC) <= radius && Math.abs(dyC) <= radius) {
+              const distC = Math.hypot(dxC, dyC);
+              if (distC <= radius) {
+                let bestDx = 0;
+                let bestDy = 0;
+                let bestDist2 = Infinity;
+                for (const target of snowContext.skyMagnetPoints) {
+                  const dx = target.x - f.x;
+                  const dy = target.y - f.y;
+                  const dist2 = dx * dx + dy * dy;
+                  if (dist2 < bestDist2) {
+                    bestDist2 = dist2;
+                    bestDx = dx;
+                    bestDy = dy;
+                  }
+                }
+                const dist = Math.sqrt(bestDist2);
+                if (dist > 0) {
+                  let pull = (1 - dist / radius) * strength;
+                  if (letterMaxY !== null && f.y > letterMaxY) {
+                    const extra = Math.max(1, bounds ? bounds.maxY - letterMaxY : radius);
+                    const belowT = clamp(0, 1, 1 - (f.y - letterMaxY) / extra);
+                    pull *= 0.35 + belowT * 0.65;
+                  }
+                  const pullX = (bestDx / dist) * pull;
+                  const pullY = (bestDy / dist) * pull;
+                  windX += pullX;
+                  windY += pullY;
+                  const damp = clamp(0.6, 1, 1 - (1 - dist / radius) * 0.35);
+                  windX *= damp;
+                  windY *= damp;
+                }
+              }
+            }
+            }
+          }
+        }
+        const driftCap = maxPush * 0.6;
+        let drift = clamp(-driftCap, driftCap, f.drift);
+        if (Math.abs(windX) > maxPush * 0.12) {
+          drift = Math.sign(windX) * Math.abs(drift);
+        }
+        const totalX = clamp(-maxPush, maxPush, windX + drift);
         windY = clamp(-maxPush, maxPush, windY);
-        f.x += (windX + f.drift) * dt;
+        f.x += totalX * dt;
         const effectiveVyRaw = f.vy + windY;
         const maxLift = -f.vy * 0.6; // allow lift but not inverted firehose
         const effectiveVy = clamp(maxLift, maxPush, effectiveVyRaw);
@@ -1924,7 +2010,7 @@ export class SnowfallLayer extends BaseLayer {
     if (this.mode === "mid" && this.settled.length) {
       for (let i = this.settled.length - 1; i >= 0; i--) {
         const s = this.settled[i];
-        s.age += dt;
+        s.age += dt * (1 + snowContext.stormStrength * 6);
         if (s.age > s.life) {
           this.settled.splice(i, 1);
         }
@@ -1932,19 +2018,24 @@ export class SnowfallLayer extends BaseLayer {
     }
 
       // Wind erosion / lofting of settled snow (like a snowglobe)
-      if (this.mode === "mid" && windMag > 50 && this.village && this.trees) {
-        const gustFactor = 1 + this.gustBoost * 1.2;
-        const liftChance = clamp(0, 0.75, ((windMag - 50) / 380) * gustFactor);
-        const erosion = ((windMag - 50) / 1400) * gustFactor;
+      const stormMag = Math.abs(snowContext.stormWindX);
+      const effectiveWind = Math.max(windMag, stormMag);
+      if (this.mode === "mid" && effectiveWind > 50 && this.village && this.trees) {
+        const gustFactor = 1 + this.gustBoost * 1.35 + snowContext.stormStrength * 0.8;
+        const liftChance = clamp(0, 0.9, ((effectiveWind - 40) / 320) * gustFactor);
+        const erosion = ((effectiveWind - 40) / 900) * gustFactor;
         let lofted = 0;
-        const loftCap = 24 + Math.floor(this.gustBoost * 12);
-        const loftBoost = clamp(0.4, 1.6, ((windMag - 40) / 260) * gustFactor);
+        const loftCap = 36 + Math.floor(this.gustBoost * 20);
+        const loftBoost = clamp(0.5, 2.2, ((effectiveWind - 40) / 220) * gustFactor);
+        const maxPush = this.windMaxPush || 1;
         const launch = (x: number, y: number, span = 0, height = 0, strength = 1) => {
           if (lofted >= loftCap) return;
           const jitterX = (Math.random() - 0.5) * Math.max(8, span * 0.35);
           const jitterY = -(Math.random() * Math.max(6, height * 0.2));
-          const upward = -30 - Math.random() * 50 - strength * 18;
-          this.launchFlake(x + jitterX, y + jitterY, upward);
+          const upward = -34 - Math.random() * 60 - strength * 22;
+          const windAt = mouseWind.getWindAt(x, y);
+          const windKick = clamp(-maxPush, maxPush, windAt.x) * (0.3 + strength * 0.35);
+          this.launchFlake(x + jitterX, y + jitterY, upward, windKick);
           lofted++;
         };
         const maybeLaunch = (x: number, y: number, span = 0, height = 0, strength = 1) => {
@@ -1966,7 +2057,7 @@ export class SnowfallLayer extends BaseLayer {
           h.snowDepth = this.average(h.snowBins);
           maybeLaunch(roof.apexX, roof.yBase, roof.right - roof.left, roof.roofHeight);
           if (removedTotal > 0) {
-            const extra = Math.min(6, Math.floor(removedTotal * 0.8 + windMag * 0.01));
+            const extra = Math.min(6, Math.floor(removedTotal * 0.8 + effectiveWind * 0.01));
             for (let i = 0; i < extra; i++) {
               launch(roof.apexX, roof.yBase, roof.right - roof.left, roof.roofHeight, 0.8 + loftBoost);
             }
@@ -2021,24 +2112,64 @@ export class SnowfallLayer extends BaseLayer {
           }
         }
         const groundBefore = snowContext.groundDepth;
-        snowContext.groundDepth = Math.max(0, snowContext.groundDepth - erosion * 0.25);
+        snowContext.groundDepth = Math.max(0, snowContext.groundDepth - erosion * 0.35);
         const groundRemoved = groundBefore - snowContext.groundDepth;
         if (groundRemoved > 0) {
           this.refundBudget(groundRemoved);
-          const extra = Math.min(10, Math.floor(groundRemoved * 1.4 + windMag * 0.015));
-          const maxH = SNOW_DEFAULT_MAX_DEPTH * 3.2;
+          const extra = Math.min(18, Math.floor(groundRemoved * 1.2 + effectiveWind * 0.02));
+          const maxH = this.groundDepthCap * 3.2;
           for (let i = 0; i < extra; i++) {
             const x = Math.random() * this.width;
             const idx = clamp(0, this.groundBins.length - 1, Math.floor((x / this.width) * (this.groundBins.length - 1)));
             const h = clamp(0, maxH, this.groundBins[idx] * 1.2);
-            launch(x, this.height - h, 24, 18, 0.6 + loftBoost * 0.5);
+            launch(x, this.height - h, 24, 18, 0.7 + loftBoost * 0.6);
           }
         }
       }
-      if (this.mode === "mid" && this.groundBins.length) {
-        this.updateGroundDrift(dt, windTune);
-      }
+    if (this.mode === "mid" && this.groundBins.length) {
+      this.updateGroundDrift(dt, windTune);
+    }
     this.updatePuffs(dt);
+  }
+
+  private updateStorm(dt: number, windTune: WindTrailOptions): void {
+    const calm = 32;
+    const ramp = 16;
+    const peak = 12;
+    const decay = 12;
+    const cycle = calm + ramp + peak + decay;
+    this.stormTime += dt;
+    if (this.stormTime >= cycle) {
+      this.stormTime -= cycle;
+      this.stormCyclesSinceFlip += 1;
+      if (this.stormCyclesSinceFlip >= this.stormHoldCycles) {
+        this.stormCyclesSinceFlip = 0;
+        this.stormHoldCycles = 2 + Math.floor(Math.random() * 3);
+        this.stormDirTarget = Math.random() < 0.5 ? -1 : 1;
+      }
+    }
+
+    let strength = 0;
+    if (this.stormTime < calm) {
+      strength = 0;
+    } else if (this.stormTime < calm + ramp) {
+      const t = (this.stormTime - calm) / ramp;
+      strength = 0.2 + 0.8 * smoothstep(0, 1, t);
+    } else if (this.stormTime < calm + ramp + peak) {
+      strength = 1;
+    } else {
+      const t = (this.stormTime - calm - ramp - peak) / decay;
+      strength = 1 - smoothstep(0, 1, t);
+    }
+
+    const maxPush = windTune.maxPush || 1;
+    const dirEase = 1 - Math.exp(-dt * 0.5);
+    this.stormDir += (this.stormDirTarget - this.stormDir) * dirEase;
+    const gust = 0.9 + 0.1 * Math.sin(this.time * 1.1 + this.stormDir);
+    const stormWind =
+      strength > 0 ? this.stormDir * maxPush * (0.04 + 0.28 * strength) * gust : 0;
+    snowContext.stormStrength = clamp(0, 1, strength);
+    snowContext.stormWindX = stormWind;
   }
 
   private getPresentWakeOffset(wakes: PresentWake[], x: number, y: number): Vector2 {
@@ -2103,11 +2234,6 @@ export class SnowfallLayer extends BaseLayer {
     if (this.mode === "mid") {
       this.drawPuffs(ctx);
     }
-
-      // ground accumulation rendered as a piled band
-      if (this.mode === "mid" && snowContext.groundDepth > 0.2 && this.groundBins.length) {
-        this.drawGroundSnow(ctx, this.groundBins);
-      }
   }
 
     protected handleResize(): void {
@@ -2185,7 +2311,7 @@ export class SnowfallLayer extends BaseLayer {
               : 1 + Math.min(0.2, -slopeInfluence * 0.2);
           const added = f.radius * 1.2 * amountScale;
           if (stick) {
-            this.addSnowToBins(house.snowBins, idx, added, 0.5, this.maxDepth, SNOW_DEFAULT_MAX_DEPTH, f.x);
+            this.addSnowToBins(house.snowBins, idx, added, 0.5, this.maxDepth, this.groundDepthCap, f.x);
             house.snowDepth = Math.min(this.maxDepth, this.average(house.snowBins));
           }
           this.resetFlake(f, true);
@@ -2360,11 +2486,11 @@ export class SnowfallLayer extends BaseLayer {
         used += appliedBelow;
       }
       if (spillRemaining > 0) {
-        used += this.addToGround(spillRemaining * 0.45, SNOW_DEFAULT_MAX_DEPTH, posX);
+        used += this.addToGround(spillRemaining * 0.45, this.groundDepthCap, posX);
         spillRemaining = 0;
       }
       if (remaining > 0) {
-        used += this.addToGround(remaining * 0.35, SNOW_DEFAULT_MAX_DEPTH, posX);
+        used += this.addToGround(remaining * 0.35, this.groundDepthCap, posX);
         remaining = 0;
       }
     }
@@ -2433,48 +2559,74 @@ export class SnowfallLayer extends BaseLayer {
 
   private sampleGroundWind(): Vector2 {
     const y = this.height - 18;
-    const samples = [0.2, 0.5, 0.8];
+    const pointer = mouseWind.getPointer?.();
+    const baseX = pointer ? clamp(0, this.width, pointer.x) : this.width * 0.5;
+    const spread = pointer ? Math.min(90, this.width * 0.08) : this.width * 0.3;
+    const samples = pointer
+      ? [baseX - spread, baseX, baseX + spread]
+      : [this.width * 0.2, this.width * 0.5, this.width * 0.8];
     let wx = 0;
     let wy = 0;
-    for (const t of samples) {
-      const w = mouseWind.getWindAt(this.width * t, y);
+    for (const sampleX of samples) {
+      const x = clamp(0, this.width, sampleX);
+      const w = mouseWind.getWindAt(x, y);
       wx += w.x;
       wy += w.y;
     }
     const inv = 1 / samples.length;
-    return { x: wx * inv, y: wy * inv };
+    return { x: wx * inv + snowContext.stormWindX, y: wy * inv };
   }
 
   private updateGroundDrift(dt: number, windTune: WindTrailOptions): void {
     if (this.mode !== "mid" || !this.groundBins.length) return;
     const maxPush = windTune.maxPush || 1;
     const windX = this.groundWind.x;
-    const strength = clamp(0, 1, (Math.abs(windX) / maxPush) * 1.6 + this.gustBoost * 0.6);
+    const strength = clamp(0, 1, (Math.abs(windX) / maxPush) * 2.1 + this.gustBoost * 0.9);
     if (strength < 0.005) return;
     const direction = windX >= 0 ? 1 : -1;
     const bins = this.groundBins;
-    const flow = strength * dt * 5.2;
+    const pointer = mouseWind.getPointer?.();
+    const idxCenter = pointer
+      ? clamp(0, bins.length - 1, Math.floor((pointer.x / this.width) * (bins.length - 1)))
+      : Math.floor(bins.length / 2);
+    const influence = pointer
+      ? Math.max(6, Math.floor(bins.length * (0.05 + strength * 0.08)))
+      : bins.length;
+    const left = pointer ? Math.max(0, idxCenter - influence) : 0;
+    const right = pointer ? Math.min(bins.length - 1, idxCenter + influence) : bins.length - 1;
+    const flow = strength * dt * (pointer ? 6.4 : 7.4);
+    const falloffAt = (idx: number): number => {
+      if (!pointer) return 1;
+      const t = 1 - Math.abs(idx - idxCenter) / Math.max(1, influence);
+      return t <= 0 ? 0 : t * t;
+    };
     if (direction > 0) {
-      for (let i = 0; i < bins.length - 1; i++) {
+      for (let i = left; i < right; i++) {
+        const falloff = falloffAt(i);
+        if (falloff <= 0) continue;
         const jitter = 0.65 + 0.35 * (0.5 + 0.5 * noise1d(i * 0.3 + this.time * 0.6));
-        const move = Math.min(bins[i], bins[i] * flow * jitter);
+        const move = Math.min(bins[i], bins[i] * flow * jitter * (0.35 + 0.65 * falloff));
         bins[i] -= move;
         bins[i + 1] += move;
       }
     } else {
-      for (let i = bins.length - 1; i > 0; i--) {
+      for (let i = right; i > left; i--) {
+        const falloff = falloffAt(i);
+        if (falloff <= 0) continue;
         const jitter = 0.65 + 0.35 * (0.5 + 0.5 * noise1d(i * 0.3 + this.time * 0.6));
-        const move = Math.min(bins[i], bins[i] * flow * jitter);
+        const move = Math.min(bins[i], bins[i] * flow * jitter * (0.35 + 0.65 * falloff));
         bins[i] -= move;
         bins[i - 1] += move;
       }
     }
 
     const slopeLimit = 1.1 + strength * 4.8;
-    for (let i = 0; i < bins.length - 1; i++) {
+    for (let i = left; i < right; i++) {
       const diff = bins[i] - bins[i + 1];
       if (Math.abs(diff) <= slopeLimit) continue;
-      const slide = (Math.abs(diff) - slopeLimit) * 0.45;
+      const falloff = falloffAt(i);
+      if (falloff <= 0) continue;
+      const slide = (Math.abs(diff) - slopeLimit) * 0.35 * (0.35 + 0.65 * falloff);
       if (diff > 0) {
         bins[i] -= slide;
         bins[i + 1] += slide;
@@ -2484,26 +2636,44 @@ export class SnowfallLayer extends BaseLayer {
       }
     }
 
+    const stormStrength = snowContext.stormStrength;
+    if (stormStrength > 0.05) {
+      const clearRate = (0.12 + stormStrength * 0.35) * dt;
+      let removed = 0;
+      for (let i = 0; i < bins.length; i++) {
+        const before = bins[i];
+        const after = before * Math.max(0, 1 - clearRate);
+        bins[i] = after;
+        removed += before - after;
+      }
+      if (removed > 0) this.refundBudget(removed);
+    }
+
     if (snowContext.groundDepth > 0.2) {
-      const loftRate = strength * 80;
-      this.groundLoft = Math.min(60, this.groundLoft + loftRate * dt);
-      const maxLoft = 28;
+      const loftRate = strength * 140;
+      this.groundLoft = Math.min(100, this.groundLoft + loftRate * dt);
+      const maxLoft = 46;
       let lofted = 0;
-      const maxH = SNOW_DEFAULT_MAX_DEPTH * 3.2;
-      const attemptsMax = 70;
+      const maxH = this.groundDepthCap * 3.2;
+      const attemptsMax = 90;
       let attempts = 0;
+      const windBias = maxPush > 0 ? clamp(-1, 1, windX / maxPush) : 0;
+      const windKick = windX * (0.35 + strength * 0.45);
+      const rangeSpan = Math.max(1, right - left + 1);
       while (this.groundLoft >= 1 && lofted < maxLoft && attempts < attemptsMax) {
         attempts++;
-        const idx = Math.floor(Math.random() * bins.length);
+        const idx = pointer
+          ? clamp(0, bins.length - 1, left + Math.floor(Math.random() * rangeSpan))
+          : Math.floor(Math.random() * bins.length);
         const h = clamp(0, maxH, bins[idx] * 1.2);
         if (h < 1.5) {
           this.groundLoft -= 0.3;
           continue;
         }
         const x = (idx / (bins.length - 1 || 1)) * this.width;
-        const jitterX = (Math.random() - 0.5) * 18;
-        const upward = -20 - strength * 70 - Math.random() * 40;
-        this.launchFlake(x + jitterX, this.height - h, upward);
+        const jitterX = (Math.random() - 0.5) * 18 + windBias * 10;
+        const upward = -26 - strength * 85 - Math.random() * 45;
+        this.launchFlake(x + jitterX, this.height - h, upward, windKick);
         this.groundLoft -= 0.7;
         lofted++;
       }
@@ -2514,9 +2684,11 @@ export class SnowfallLayer extends BaseLayer {
     snowContext.groundDepth = this.average(bins);
   }
 
-  private spawnSnowPuff(x: number, y: number, strength = 1): void {
+  private spawnSnowPuff(x: number, y: number, strength = 1, windX = 0): void {
     if (this.mode !== "mid") return;
     const count = 6 + Math.floor(strength * 8);
+    const windBoost =
+      this.groundWindMax > 0 ? windX * (0.12 + strength * 0.08) : 0;
     for (let i = 0; i < count; i++) {
       const angle = (Math.random() - 0.5) * Math.PI * 0.9;
       const speed = 12 + Math.random() * 28 * strength;
@@ -2524,7 +2696,7 @@ export class SnowfallLayer extends BaseLayer {
       this.puffs.push({
         x: x + (Math.random() - 0.5) * 10,
         y: y + (Math.random() - 0.5) * 6,
-        vx: Math.cos(angle) * speed,
+        vx: Math.cos(angle) * speed + windBoost,
         vy: -Math.abs(Math.sin(angle)) * speed * 0.7 - 10 * strength,
         age: 0,
         life: 0.5 + Math.random() * 0.7,
@@ -2539,13 +2711,23 @@ export class SnowfallLayer extends BaseLayer {
 
   private spawnGroundPuffs(count: number, strength: number): void {
     if (!this.groundBins.length || snowContext.groundDepth < 0.2) return;
-    const maxH = SNOW_DEFAULT_MAX_DEPTH * 3.2;
+    const maxH = this.groundDepthCap * 3.2;
+    const pointer = mouseWind.getPointer?.();
+    const idxCenter = pointer
+      ? clamp(0, this.groundBins.length - 1, Math.floor((pointer.x / this.width) * (this.groundBins.length - 1)))
+      : Math.floor(this.groundBins.length / 2);
+    const influence = pointer ? Math.max(6, Math.floor(this.groundBins.length * 0.08)) : this.groundBins.length;
+    const left = pointer ? Math.max(0, idxCenter - influence) : 0;
+    const right = pointer ? Math.min(this.groundBins.length - 1, idxCenter + influence) : this.groundBins.length - 1;
+    const span = Math.max(1, right - left + 1);
     for (let i = 0; i < count; i++) {
-      const idx = Math.floor(Math.random() * this.groundBins.length);
+      const idx = pointer
+        ? clamp(0, this.groundBins.length - 1, left + Math.floor(Math.random() * span))
+        : Math.floor(Math.random() * this.groundBins.length);
       const h = clamp(0, maxH, this.groundBins[idx] * 1.2);
       if (h < 1) continue;
       const x = (idx / (this.groundBins.length - 1 || 1)) * this.width;
-      this.spawnSnowPuff(x, this.height - h, strength);
+      this.spawnSnowPuff(x, this.height - h, strength, this.groundWind.x);
     }
   }
 
@@ -2583,10 +2765,10 @@ export class SnowfallLayer extends BaseLayer {
   }
 
   private drawGroundSnow(ctx: CanvasRenderingContext2D, bins: number[]): void {
-    const depthNorm = clamp(0, 1, snowContext.groundDepth / SNOW_DEFAULT_MAX_DEPTH);
+    const depthNorm = clamp(0, 1, snowContext.groundDepth / this.groundDepthCap);
     if (depthNorm <= 0) return;
     const heights = smoothBins(bins, 3);
-    const maxH = SNOW_DEFAULT_MAX_DEPTH * 3.2;
+    const maxH = this.groundDepthCap * 3.2;
     const yBase = this.height;
     const binW = this.width / (heights.length - 1 || 1);
 
@@ -2666,12 +2848,12 @@ export class SnowfallLayer extends BaseLayer {
     return inside;
   }
 
-  private launchFlake(x: number, y: number, upwardVel = -35): void {
+  private launchFlake(x: number, y: number, upwardVel = -35, windBoost = 0): void {
     const f = this.flakes[Math.floor(Math.random() * this.flakes.length)];
     f.x = x;
     f.y = y;
     f.vy = Math.abs(upwardVel) * -1;
-    f.drift = (Math.random() - 0.5) * this.drift * 0.5;
+    f.drift = (Math.random() - 0.5) * this.drift * 0.5 + windBoost;
   }
 
   private shouldStick(windMag?: number): boolean {
@@ -2696,6 +2878,91 @@ export class SnowfallLayer extends BaseLayer {
       age: 0,
       life: 18, // seconds until fade
     });
+  }
+}
+
+export class GroundSnowLayer extends BaseLayer {
+  private time = 0;
+
+  constructor(width: number, height: number) {
+    super(width, height, 0);
+  }
+
+  update(dt: number): void {
+    this.time += dt;
+  }
+
+  draw(ctx: CanvasRenderingContext2D, _camera: Vector2): void {
+    if (snowContext.groundDepth <= 0.2 || !snowContext.groundBins.length) return;
+    const depthCap = snowContext.groundDepthCap || SNOW_DEFAULT_MAX_DEPTH;
+    const depthNorm = clamp(0, 1, snowContext.groundDepth / depthCap);
+    if (depthNorm <= 0) return;
+
+    const heights = smoothBins(snowContext.groundBins, 3);
+    const maxH = depthCap * 3.2;
+    const yBase = this.height;
+    const binW = this.width / (heights.length - 1 || 1);
+
+    ctx.save();
+    ctx.fillStyle = shadeColor("#e6edf8", 0.9 + depthNorm * 0.35);
+    ctx.globalAlpha = 0.5 + depthNorm * 0.35;
+    ctx.beginPath();
+    ctx.moveTo(0, yBase);
+    for (let i = 0; i < heights.length; i++) {
+      const x = i * binW;
+      const h = clamp(0, maxH, heights[i] * 1.2);
+      ctx.lineTo(x, yBase - h);
+    }
+    ctx.lineTo(this.width, yBase);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.globalAlpha = 0.16 + depthNorm * 0.22;
+    ctx.fillStyle = "rgba(6, 10, 18, 0.5)";
+    ctx.fillRect(0, yBase - 3, this.width, 3);
+
+    ctx.globalAlpha = 0.22 + depthNorm * 0.28;
+    ctx.strokeStyle = "#f6fbff";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    for (let i = 0; i < heights.length; i++) {
+      const x = i * binW;
+      const h = clamp(0, maxH, heights[i] * 1.2);
+      const y = yBase - h;
+      if (i === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    }
+    ctx.stroke();
+
+    const sheen = snowContext.windSheen;
+    if (sheen > 0.05) {
+      const sweep = (this.time * 0.1 + (snowContext.windDir >= 0 ? 0 : 0.5)) % 1;
+      const band = 0.12;
+      const glow = "#f6fbff";
+      const grad = ctx.createLinearGradient(0, 0, this.width, 0);
+      grad.addColorStop(clamp(0, 1, sweep - band), toRgba(glow, 0));
+      grad.addColorStop(clamp(0, 1, sweep), toRgba(glow, 0.9));
+      grad.addColorStop(clamp(0, 1, sweep + band), toRgba(glow, 0));
+      ctx.globalAlpha = 0.2 + sheen * 0.55;
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      for (let i = 0; i < heights.length; i++) {
+        const x = i * binW;
+        const h = clamp(0, maxH, heights[i] * 1.2);
+        const y = yBase - h;
+        if (i === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 }
 
@@ -3082,12 +3349,22 @@ export class SkyMessageLayer extends BaseLayer {
   private readonly textCanvas: HTMLCanvasElement;
   private readonly textCtx: CanvasRenderingContext2D | null;
   private glyphPoints: MessagePoint[] = [];
+  private glyphBounds: { minX: number; maxX: number; minY: number; maxY: number } | null = null;
   private particles: MessageFlake[] = [];
+  private magnetTargets: MessagePoint[] = [];
+  private magnetCenter: { x: number; y: number } | null = null;
+  private magnetBounds: { minY: number; maxY: number } | null = null;
+  private magnetLetterMaxY: number | null = null;
   private time = 0;
   private state: "idle" | "hold" | "release" = "idle";
   private holdUntil = 0;
   private nextSpawn = 0;
   private cycleStart = 0;
+  private magnetRadius = 80;
+  private formedAt: number | null = null;
+  private formThreshold = 0.9;
+  private lastFormRatio = 0;
+  private minHoldAfterForm = 1.5;
 
   private parseTextList(value: unknown): string[] {
     if (Array.isArray(value)) {
@@ -3169,20 +3446,63 @@ export class SkyMessageLayer extends BaseLayer {
     }
 
     if (this.state === "hold") {
-      const t = this.time;
+      const settle = clamp(0, 1, (this.time - this.cycleStart) / Math.max(0.1, this.fadeIn));
+      const magnetStrength = 4 + settle * 9;
+      const damping = 7 + settle * 10;
+      const damp = Math.exp(-dt * damping);
+      let snapped = 0;
       for (const p of this.particles) {
-        p.x = p.baseX + Math.sin(t * 1.4 + p.phase) * this.jitter;
-        p.y = p.baseY + Math.cos(t * 1.1 + p.phase) * this.jitter;
+        const dx = p.baseX - p.x;
+        const dy = p.baseY - p.y;
+        const dist = Math.hypot(dx, dy);
+        const snapDist = Math.max(0.6, p.radius * 0.35);
+        if (dist <= snapDist) {
+          p.x = p.baseX;
+          p.y = p.baseY;
+          p.vx = 0;
+          p.vy = 0;
+          snapped += 1;
+          continue;
+        }
+        p.vx += dx * magnetStrength * dt;
+        p.vy += dy * magnetStrength * dt;
+        p.vx *= damp;
+        p.vy *= damp;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
       }
+      const ratio = this.particles.length ? snapped / this.particles.length : 0;
+      this.lastFormRatio = Math.max(this.lastFormRatio, ratio);
+      if (this.formedAt === null) {
+        const maxFormTime = Math.max(3.5, this.fadeIn * 3.5);
+        if (ratio >= this.formThreshold || this.time - this.cycleStart > maxFormTime) {
+          this.formedAt = this.time;
+          this.lastFormRatio = Math.max(this.lastFormRatio, this.formThreshold);
+          this.holdUntil = this.time + Math.max(this.hold, this.minHoldAfterForm);
+        }
+      }
+      snowContext.skyMagnetActive = true;
+      snowContext.skyMagnetCenter = this.magnetCenter;
+      snowContext.skyMagnetRadius = this.magnetRadius;
+      snowContext.skyMagnetStrength = 55 + settle * 140;
+      snowContext.skyMagnetPoints = this.magnetTargets;
+      snowContext.skyMagnetBounds = this.magnetBounds;
+      snowContext.skyMagnetLetterMaxY = this.magnetLetterMaxY;
       if (this.time >= this.holdUntil) {
         this.state = "release";
         for (const p of this.particles) {
           p.releasedAt = this.time;
-          p.vx += (this.rng() - 0.5) * 8;
-          p.vy = 6 + this.rng() * 10;
+          p.vx *= 0.25;
+          p.vy = 10 + this.rng() * 8;
         }
       }
     } else if (this.state === "release") {
+      if (snowContext.skyMagnetActive) {
+        snowContext.skyMagnetActive = false;
+        snowContext.skyMagnetStrength = 0;
+        snowContext.skyMagnetBounds = null;
+        snowContext.skyMagnetLetterMaxY = null;
+      }
       const windTune = windConfig();
       const maxPush = windTune.maxPush ?? 0;
       for (const p of this.particles) {
@@ -3202,6 +3522,17 @@ export class SkyMessageLayer extends BaseLayer {
       if (!this.particles.length) {
         this.state = "idle";
         this.nextSpawn = this.time + this.interval;
+        snowContext.skyMagnetActive = false;
+        snowContext.skyMagnetStrength = 0;
+        snowContext.skyMagnetBounds = null;
+        snowContext.skyMagnetLetterMaxY = null;
+      }
+    } else {
+      if (snowContext.skyMagnetActive) {
+        snowContext.skyMagnetActive = false;
+        snowContext.skyMagnetStrength = 0;
+        snowContext.skyMagnetBounds = null;
+        snowContext.skyMagnetLetterMaxY = null;
       }
     }
   }
@@ -3212,10 +3543,41 @@ export class SkyMessageLayer extends BaseLayer {
     ctx.save();
     ctx.translate(-offset.x, -offset.y);
 
+    if (
+      this.state === "hold" &&
+      this.magnetCenter &&
+      this.glyphPoints.length &&
+      this.formedAt !== null &&
+      this.holdUntil !== Number.POSITIVE_INFINITY
+    ) {
+      const timeToRelease = this.holdUntil - this.time;
+      const finishT = clamp(0, 1, 1 - timeToRelease / 0.9);
+      if (finishT > 0) {
+        const underlayAlpha = 0.14 + finishT * 0.38;
+        ctx.fillStyle = toRgba(this.color, underlayAlpha);
+        for (let i = 0; i < this.glyphPoints.length; i += 2) {
+          const pt = this.glyphPoints[i];
+          ctx.beginPath();
+          ctx.arc(
+            this.magnetCenter.x + pt.x,
+            this.magnetCenter.y + pt.y,
+            2.6,
+            0,
+            Math.PI * 2
+          );
+          ctx.fill();
+        }
+      }
+    }
+
     for (const p of this.particles) {
       let alpha = 1;
       if (this.state === "hold") {
-        alpha = clamp(0, 1, (this.time - this.cycleStart) / Math.max(0.1, this.fadeIn));
+        const dist = Math.hypot(p.baseX - p.x, p.baseY - p.y);
+        const arrive = clamp(0, 1, 1 - dist / Math.max(20, this.magnetRadius));
+        alpha =
+          clamp(0, 1, (this.time - this.cycleStart) / Math.max(0.1, this.fadeIn)) *
+          (0.4 + arrive * 0.6);
       } else if (this.state === "release" && p.releasedAt !== null) {
         alpha = clamp(
           0,
@@ -3230,6 +3592,27 @@ export class SkyMessageLayer extends BaseLayer {
       ctx.fill();
     }
 
+    if (this.state === "hold" && this.magnetCenter && this.glyphPoints.length) {
+      const baseT =
+        this.formedAt !== null
+          ? clamp(0, 1, (this.time - this.formedAt) / 0.6)
+          : clamp(0, 1, (this.time - this.cycleStart) / Math.max(0.1, this.fadeIn));
+      const fillAlpha = 0.18 + baseT * 0.35 + this.lastFormRatio * 0.12;
+      ctx.fillStyle = toRgba(this.color, fillAlpha);
+      for (let i = 0; i < this.glyphPoints.length; i += 2) {
+        const pt = this.glyphPoints[i];
+        ctx.beginPath();
+        ctx.arc(
+          this.magnetCenter.x + pt.x,
+          this.magnetCenter.y + pt.y,
+          1.4,
+          0,
+          Math.PI * 2
+        );
+        ctx.fill();
+      }
+    }
+
     ctx.restore();
   }
 
@@ -3240,20 +3623,66 @@ export class SkyMessageLayer extends BaseLayer {
     this.buildGlyphPoints(text);
     this.textIndex = (this.textIndex + 1) % this.texts.length;
     const points = this.samplePoints(this.glyphPoints, this.maxFlakes);
-    this.particles = points.map((pt) => ({
-      baseX: centerX + pt.x,
-      baseY: centerY + pt.y,
+    const bounds = this.glyphBounds ?? { minX: -20, maxX: 20, minY: -12, maxY: 12 };
+    const glyphW = Math.max(20, bounds.maxX - bounds.minX);
+    const glyphH = Math.max(14, bounds.maxY - bounds.minY);
+    const padX = Math.max(20, glyphW * 0.35);
+    const padY = Math.max(16, glyphH * 0.45);
+    const spreadX = glyphW + padX * 2;
+    const spreadY = glyphH + padY * 2;
+    const minX = bounds.minX - padX;
+    const minY = bounds.minY - padY;
+    const maxY = bounds.maxY + padY;
+    const underPullY = Math.max(18, glyphH * 0.2);
+    this.magnetRadius = Math.max(50, Math.max(spreadX, spreadY) * 0.5);
+
+    const targets = points.map((pt) => ({
       x: centerX + pt.x,
       y: centerY + pt.y,
-      vx: (this.rng() - 0.5) * 6,
-      vy: (this.rng() - 0.5) * 4,
-      radius:
-        this.flakeSize[0] + this.rng() * Math.max(0.1, this.flakeSize[1] - this.flakeSize[0]),
-      phase: this.rng() * Math.PI * 2,
-      releasedAt: null,
     }));
+    const particles: MessageFlake[] = [];
+    this.formedAt = null;
+    this.holdUntil = Number.POSITIVE_INFINITY;
+    this.lastFormRatio = 0;
+    this.magnetCenter = { x: centerX, y: centerY };
+    this.magnetLetterMaxY = centerY + bounds.maxY;
+    this.magnetBounds = {
+      minY: centerY + minY,
+      maxY: centerY + maxY + underPullY,
+    };
+    this.magnetTargets = targets.filter((_, idx) => idx % 2 === 0);
+    while (targets.length) {
+      const startX = centerX + minX + this.rng() * spreadX;
+      const startY = centerY + minY + this.rng() * spreadY;
+      let bestIndex = 0;
+      let bestDist = Infinity;
+      for (let i = 0; i < targets.length; i++) {
+        const dx = targets[i].x - startX;
+        const dy = targets[i].y - startY;
+        const dist = dx * dx + dy * dy;
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestIndex = i;
+        }
+      }
+      const target = targets[bestIndex];
+      targets[bestIndex] = targets[targets.length - 1];
+      targets.pop();
+      particles.push({
+        baseX: target.x,
+        baseY: target.y,
+        x: startX,
+        y: startY,
+        vx: (this.rng() - 0.5) * 4,
+        vy: (this.rng() - 0.5) * 3,
+        radius:
+          this.flakeSize[0] + this.rng() * Math.max(0.1, this.flakeSize[1] - this.flakeSize[0]),
+        phase: this.rng() * Math.PI * 2,
+        releasedAt: null,
+      });
+    }
+    this.particles = particles;
     this.cycleStart = this.time;
-    this.holdUntil = this.time + this.hold;
     this.state = "hold";
   }
 
@@ -3282,18 +3711,30 @@ export class SkyMessageLayer extends BaseLayer {
       this.sampleStep ?? Math.max(2, Math.round(fontSize * 0.07));
     const data = this.textCtx.getImageData(0, 0, canvasWidth, canvasHeight).data;
     const points: MessagePoint[] = [];
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
     for (let y = 0; y < canvasHeight; y += step) {
       for (let x = 0; x < canvasWidth; x += step) {
         const idx = (y * canvasWidth + x) * 4 + 3;
         if (data[idx] > 40) {
-          points.push({
-            x: x - canvasWidth / 2 + (this.rng() - 0.5) * step * 0.5,
-            y: y - canvasHeight / 2 + (this.rng() - 0.5) * step * 0.5,
-          });
+          const px = x - canvasWidth / 2 + (this.rng() - 0.5) * step * 0.5;
+          const py = y - canvasHeight / 2 + (this.rng() - 0.5) * step * 0.5;
+          minX = Math.min(minX, px);
+          maxX = Math.max(maxX, px);
+          minY = Math.min(minY, py);
+          maxY = Math.max(maxY, py);
+          points.push({ x: px, y: py });
         }
       }
     }
     this.glyphPoints = points;
+    if (points.length) {
+      this.glyphBounds = { minX, maxX, minY, maxY };
+    } else {
+      this.glyphBounds = null;
+    }
   }
 
   private samplePoints(points: MessagePoint[], limit: number): MessagePoint[] {
@@ -3400,6 +3841,7 @@ export function createLayers(
       undefined,
       santa
     ),
+    new GroundSnowLayer(viewState.worldWidth, viewState.worldHeight),
   ];
 }
 

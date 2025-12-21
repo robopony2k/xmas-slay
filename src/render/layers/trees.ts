@@ -188,62 +188,66 @@ export class ForegroundTreesLayer extends BaseLayer {
     const basePush = this.height * 0.12; // push foreground down into lower frame without lifting village off the ground
     const groundLine = this.terrain(this.width * 0.5) + basePush;
     const maxOffset = this.offsetYMax + 26;
+    const hasGroundSnow =
+      snowContext.groundDepth > 0.2 && snowContext.groundBins.length > 0;
 
-    // Fill near-ground band to avoid empty lower viewport
-    const groundTopCandidate = clamp(0, this.height, groundLine - maxOffset * 0.22);
-    const villageBase =
-      typeof this.village?.getLowestHouseBaseY === "function"
-        ? this.village.getLowestHouseBaseY()
-        : undefined;
-    const minGroundTop =
-      villageBase !== undefined ? villageBase + this.height * 0.01 : groundTopCandidate;
-    const groundTop = clamp(0, this.height, Math.max(groundTopCandidate, minGroundTop));
-    const terrainMid = this.terrain(this.width * 0.5);
-    const leftX = -offset.x;
-    const rightX = this.width + offset.x * 2;
-    const span = Math.max(1, rightX - leftX);
-    const steps = Math.max(24, Math.floor(span / 60));
-    const bandPoints: { x: number; y: number }[] = [];
-    let bandMinY = groundTop;
-    for (let i = 0; i <= steps; i++) {
-      const t = i / steps;
-      const x = leftX + span * t;
-      const terrainDelta = (this.terrain(x) - terrainMid) * 0.45;
-      const wave = noise1d(x * 0.007 + this.groundBandSeed) * this.groundBandAmp;
-      const hillY = groundTop + terrainDelta + wave;
-      const y = clamp(0, this.height, Math.max(hillY, minGroundTop));
-      bandMinY = Math.min(bandMinY, y);
-      bandPoints.push({ x, y });
-    }
+    if (!hasGroundSnow) {
+      // Fill near-ground band to avoid empty lower viewport
+      const groundTopCandidate = clamp(0, this.height, groundLine - maxOffset * 0.22);
+      const villageBase =
+        typeof this.village?.getLowestHouseBaseY === "function"
+          ? this.village.getLowestHouseBaseY()
+          : undefined;
+      const minGroundTop =
+        villageBase !== undefined ? villageBase + this.height * 0.01 : groundTopCandidate;
+      const groundTop = clamp(0, this.height, Math.max(groundTopCandidate, minGroundTop));
+      const terrainMid = this.terrain(this.width * 0.5);
+      const leftX = -offset.x;
+      const rightX = this.width + offset.x * 2;
+      const span = Math.max(1, rightX - leftX);
+      const steps = Math.max(24, Math.floor(span / 60));
+      const bandPoints: { x: number; y: number }[] = [];
+      let bandMinY = groundTop;
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const x = leftX + span * t;
+        const terrainDelta = (this.terrain(x) - terrainMid) * 0.45;
+        const wave = noise1d(x * 0.007 + this.groundBandSeed) * this.groundBandAmp;
+        const hillY = groundTop + terrainDelta + wave;
+        const y = clamp(0, this.height, Math.max(hillY, minGroundTop));
+        bandMinY = Math.min(bandMinY, y);
+        bandPoints.push({ x, y });
+      }
 
-    const gradTop = clamp(0, this.height, bandMinY - this.groundBandAmp * 1.4);
-    const groundGrad = ctx.createLinearGradient(0, gradTop, 0, this.height);
-    groundGrad.addColorStop(0, "rgba(6, 12, 22, 0.35)");
-    groundGrad.addColorStop(0.45, "rgba(6, 12, 22, 0.7)");
-    groundGrad.addColorStop(1, "rgba(4, 8, 16, 0.9)");
-    ctx.fillStyle = groundGrad;
-    ctx.beginPath();
-    ctx.moveTo(leftX, this.height);
-    ctx.lineTo(bandPoints[0].x, bandPoints[0].y);
-    for (let i = 1; i < bandPoints.length; i++) {
-      ctx.lineTo(bandPoints[i].x, bandPoints[i].y);
-    }
-    ctx.lineTo(bandPoints[bandPoints.length - 1].x, this.height);
-    ctx.closePath();
-    ctx.fill();
-
-    // scatter some near-ground tufts to break up empty space
-    ctx.fillStyle = "rgba(8, 14, 26, 0.7)";
-    for (const sprig of this.groundSprigs) {
-      const x = sprig.x - offset.x;
-      if (x + sprig.width < viewLeft || x - sprig.width > viewRight) continue;
-      const y = this.height - sprig.height - sprig.height * 0.2;
+      const gradTop = clamp(0, this.height, bandMinY - this.groundBandAmp * 1.4);
+      const groundGrad = ctx.createLinearGradient(0, gradTop, 0, this.height);
+      groundGrad.addColorStop(0, "rgba(6, 12, 22, 0.35)");
+      groundGrad.addColorStop(0.45, "rgba(6, 12, 22, 0.7)");
+      groundGrad.addColorStop(1, "rgba(4, 8, 16, 0.9)");
+      ctx.fillStyle = groundGrad;
       ctx.beginPath();
-      ctx.moveTo(x, this.height);
-      ctx.lineTo(x + sprig.width * 0.5, y);
-      ctx.lineTo(x + sprig.width, this.height);
+      ctx.moveTo(leftX, this.height);
+      ctx.lineTo(bandPoints[0].x, bandPoints[0].y);
+      for (let i = 1; i < bandPoints.length; i++) {
+        ctx.lineTo(bandPoints[i].x, bandPoints[i].y);
+      }
+      ctx.lineTo(bandPoints[bandPoints.length - 1].x, this.height);
       ctx.closePath();
       ctx.fill();
+
+      // scatter some near-ground tufts to break up empty space
+      ctx.fillStyle = "rgba(8, 14, 26, 0.7)";
+      for (const sprig of this.groundSprigs) {
+        const x = sprig.x - offset.x;
+        if (x + sprig.width < viewLeft || x - sprig.width > viewRight) continue;
+        const y = this.height - sprig.height - sprig.height * 0.2;
+        ctx.beginPath();
+        ctx.moveTo(x, this.height);
+        ctx.lineTo(x + sprig.width * 0.5, y);
+        ctx.lineTo(x + sprig.width, this.height);
+        ctx.closePath();
+        ctx.fill();
+      }
     }
 
     for (const tree of this.trees) {
@@ -252,9 +256,11 @@ export class ForegroundTreesLayer extends BaseLayer {
       const ground = this.terrain(tree.x) + tree.band * this.layerOffset + basePush;
       const centerX = tree.x + tree.width * 0.5;
       const wind = mouseWind.getWindAt(centerX, ground);
-      const windNorm = clamp(-1, 1, wind.x / windMax);
+      const stormWind = snowContext.stormWindX;
+      const windNorm = clamp(-1, 1, (wind.x + stormWind) / windMax);
       const breeze = Math.sin(breezePhase + tree.x * 0.015) * 0.2;
-      const swayTilt = (windNorm * 0.05) + (breeze * 0.02);
+      const stormBoost = 1 + snowContext.stormStrength * 0.6;
+      const swayTilt = (windNorm * 0.05 * stormBoost) + (breeze * 0.02);
 
       const layers = tree.crownLayersGeom.length
         ? tree.crownLayersGeom
