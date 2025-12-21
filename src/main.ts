@@ -62,7 +62,7 @@ controls.innerHTML = `
     <div id="seed-value" class="controls__value"></div>
     <button id="seed-reroll" class="controls__button" type="button">Regenerate</button>
   </div>
-  <div class="controls__row">
+  <div id="layer-label-row" class="controls__row">
     <div class="controls__label">Layers</div>
   </div>
   <div id="layer-toggles" class="controls__row controls__toggles controls__toggles--stack"></div>
@@ -77,12 +77,20 @@ document.body.appendChild(controls);
 
 const seedValueEl = document.getElementById("seed-value");
 const rerollBtn = document.getElementById("seed-reroll");
+const layerLabelRow = controls.querySelector<HTMLDivElement>("#layer-label-row");
 const layerToggleContainer = controls.querySelector<HTMLDivElement>("#layer-toggles");
 const debugToggle = controls.querySelector<HTMLInputElement>("#debug-toggle");
+
+const updateToggleVisibility = () => {
+  const show = showLayerDebug;
+  if (layerLabelRow) layerLabelRow.style.display = show ? "" : "none";
+  if (layerToggleContainer) layerToggleContainer.style.display = show ? "" : "none";
+};
 
 const updateHud = () => {
   if (seedValueEl) seedValueEl.textContent = `${sceneSeed}`;
   if (debugToggle) debugToggle.checked = showLayerDebug;
+  updateToggleVisibility();
 };
 
 rerollBtn?.addEventListener("click", () => {
@@ -122,6 +130,7 @@ const buildLayerToggles = () => {
   });
 
   applyLayerVisibility();
+  updateToggleVisibility();
 };
 
 buildLayerToggles();
